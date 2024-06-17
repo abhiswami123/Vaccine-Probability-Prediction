@@ -1,0 +1,77 @@
+# Import required libraries
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.multioutput import MultiOutputClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score
+
+# Load the data
+train_df = pd.read_csv('train.csv')
+test_df = pd.read_csv('test.csv')
+
+# Separate features and target variables
+X_train = train_df.drop(['respondent_id', 'xyz_vaccine', 'seasonal_vaccine'], axis=1)
+y_train = train_df[['xyz_vaccine', 'seasonal_vaccine']]
+
+X_test = test_df.drop('respondent_id', axis=1)
+test_ids = test_df['respondent_id']
+
+# Identify categorical and numerical columns
+categorical_cols = X_train.select_dtypes(include=['object']).columns
+numerical_cols = X_train.select_dtypes(include=['int64', 'float64']).columns
+
+# Preprocessing pipelines
+numeric_transformer = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='median')),
+    ('scaler', StandardScaler())
+])
+
+categorical_transformer = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='most_frequent')),
+    ('onehot', OneHotEncoder(handle_unknown='ignore'))
+])
+
+preprocessor = ColumnTransformer(transformers=[
+    ('num', numeric_transformer, numerical_cols),
+    ('cat', categorical_transformer, categorical_cols)
+])
+
+# Create a pipeline with preprocessing and classifier
+clf = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('classifier', MultiOutputClassifier(LogisticRegression(max_iter=1000)))
+])
+
+# Train the model
+clf.fit(X_train, y_train)
+
+# Make predictions on the test set
+y_pred_proba = clf.predict_proba(X_test)
+
+# Prepare submission
+submission = pd.DataFrame({
+    'respondent_id': test_ids,
+    'xyz_vaccine': y_pred_proba[0][:, 1],  # Probability of positive class for xyz_vaccine
+    'seasonal_vaccine': y_pred_proba[1][:, 1]  # Probability of positive class for seasonal_vaccine
+})
+
+# Save the submission file
+submission.to_csv('submission.csv', index=False)
+
+print("Submission file created successfully.")
+
+# Optional: Evaluate the model using cross-validation
+from sklearn.model_selection import cross_val_score
+
+# Perform 5-fold cross-validation and calculate ROC AUC for both targets
+cv_scores_xyz = cross_val_score(clf, X_train, y_train['xyz_vaccine'], cv=5, scoring='roc_auc')
+cv_scores_seasonal = cross_val_score(clf, X_train, y_train['seasonal_vaccine'], cv=5, scoring='roc_auc')
+
+print(f"Cross-validation ROC AUC for xyz_vaccine: {cv_scores_xyz.mean():.4f} (+/- {cv_scores_xyz.std() * 2:.4f})")
+print(f"Cross-validation ROC AUC for seasonal_vaccine: {cv_scores_seasonal.mean():.4f} (+/- {cv_scores_seasonal.std() * 2:.4f})")
+print(f"Mean ROC AUC: {(cv_scores_xyz.mean() + cv_scores_seasonal.mean()) / 2:.4f}")
